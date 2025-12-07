@@ -1,11 +1,25 @@
 // server.js
 import express from "express";
 import puppeteer from "puppeteer";
+import { createClient } from "@supabase/supabase-js";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const app = express();
 app.use(express.json());
+app.use(express.static("public"));
 
 let browser;
+
+// Supabase client
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
+
+// Lista ID konkurencji
+const ENEMY_IDS = process.env.ENEMY ? process.env.ENEMY.split(",") : [];
 
 // helper sleep
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -69,6 +83,240 @@ app.get("/fetch", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch page", details: err.message });
   }
 });
+
+// ============== API ENDPOINTS ==============
+
+// GET /api/links - Pobierz wszystkie linki
+app.get("/api/links", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("log_current_links")
+      .select("*")
+      .order("created", { ascending: false });
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error("Error fetching links:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/links/update - Aktualizuj listę linków
+app.post("/api/links/update", async (req, res) => {
+  try {
+    const { urls } = req.body; // array of URLs
+
+    if (!Array.isArray(urls)) {
+      return res.status(400).json({ error: "Expected 'urls' array" });
+    }
+
+    // Pobierz obecne linki
+    const { data: currentLinks, error: fetchError } = await supabase
+      .from("log_current_links")
+      .select("url");
+
+    if (fetchError) throw fetchError;
+
+    const currentUrls = new Set(currentLinks.map((l) => l.url));
+    const newUrls = new Set(urls.filter((u) => u.trim()));
+
+    // Dodaj nowe linki
+    const toInsert = [...newUrls].filter((url) => !currentUrls.has(url));
+    if (toInsert.length > 0) {
+      const { error: insertError } = await supabase
+        .from("log_current_links")
+        .insert(toInsert.map((url) => ({ url })));
+
+      if (insertError) throw insertError;
+    }
+
+    // Usuń brakujące linki
+    const toDelete = [...currentUrls].filter((url) => !newUrls.has(url));
+    if (toDelete.length > 0) {
+      const { error: deleteError } = await supabase
+        .from("log_current_links")
+        .delete()
+        .in("url", toDelete);
+
+      if (deleteError) throw deleteError;
+    }
+
+    res.json({
+      added: toInsert.length,
+      removed: toDelete.length,
+      total: newUrls.size,
+    });
+  } catch (err) {
+    console.error("Error updating links:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/links/:url/check - Oznacz link jako checked
+app.patch("/api/links/:url/check", async (req, res) => {
+  try {
+    const url = decodeURIComponent(req.params.url);
+    const { checked } = req.body;
+
+    const { error } = await supabase
+      .from("log_current_links")
+      .update({ checked, modified: new Date().toISOString() })
+      .eq("url", url);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error updating link:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/run - Uruchom nowy run sprawdzający konkurencję
+app.post("/api/run", async (req, res) => {
+  try {
+    // Utwórz nowy run
+    const runId = crypto.randomUUID();
+    const { error: runError } = await supabase
+      .from("log_runs")
+      .insert({ id: runId });
+
+    if (runError) throw runError;
+
+    // Uruchom sprawdzanie w tle
+    checkAllLinks(runId).catch((err) => {
+      console.error("Background check failed:", err);
+    });
+
+    res.json({ runId, message: "Run started in background" });
+  } catch (err) {
+    console.error("Error starting run:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/runs - Pobierz historię runów
+app.get("/api/runs", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("log_runs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error("Error fetching runs:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/history - Pobierz historię sprawdzeń
+app.get("/api/history", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("log_links_history")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error("Error fetching history:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============== GŁÓWNA LOGIKA SPRAWDZANIA ==============
+
+async function checkAllLinks(runId) {
+  try {
+    // Pobierz linki do sprawdzenia (pomijamy te z enemy=true)
+    const { data: links, error } = await supabase
+      .from("log_current_links")
+      .select("*")
+      .eq("enemy", false);
+
+    if (error) throw error;
+
+    console.log(`Run ${runId}: Checking ${links.length} links`);
+
+    for (const link of links) {
+      await checkSingleLink(runId, link);
+      await sleep(1000); // Opóźnienie między requestami
+    }
+
+    // Zamknij run
+    await supabase
+      .from("log_runs")
+      .update({ closed_at: new Date().toISOString() })
+      .eq("id", runId);
+
+    console.log(`Run ${runId}: Completed`);
+  } catch (err) {
+    console.error(`Run ${runId}: Error:`, err);
+  }
+}
+
+async function checkSingleLink(runId, link) {
+  let enemy = false;
+  let error = null;
+  let page;
+
+  try {
+    await ensureBrowser();
+    page = await browser.newPage();
+
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+    );
+    await page.setViewport({ width: 1280, height: 800 });
+
+    await page.goto(link.url, { waitUntil: "networkidle2", timeout: 60000 });
+    await page.waitForSelector("#root, body", { timeout: 60000 });
+    await sleep(1500);
+
+    const html = await page.evaluate(() => document.documentElement.outerHTML);
+
+    // Sprawdź czy występują ID konkurencji
+    for (const enemyId of ENEMY_IDS) {
+      if (html.includes(enemyId.trim())) {
+        enemy = true;
+        break;
+      }
+    }
+
+    await page.close();
+  } catch (err) {
+    error = err.message;
+    console.error(`Error checking ${link.url}:`, err.message);
+    if (page && !page.isClosed()) {
+      try {
+        await page.close();
+      } catch (e) {}
+    }
+  }
+
+  // Zapisz do historii
+  await supabase.from("log_links_history").insert({
+    run_id: runId,
+    url: link.url,
+    enemy,
+    error,
+  });
+
+  // Aktualizuj current_links
+  await supabase
+    .from("log_current_links")
+    .update({
+      enemy,
+      error,
+      modified: new Date().toISOString(),
+    })
+    .eq("url", link.url);
+}
 
 // Graceful shutdown
 async function shutdown() {
