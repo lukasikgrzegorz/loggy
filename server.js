@@ -3,6 +3,7 @@ import express from "express";
 import puppeteer from "puppeteer";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import os from "os";
 
 dotenv.config();
 
@@ -26,7 +27,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function ensureBrowser() {
   if (!browser) {
-    browser = await puppeteer.launch({
+    // Na Raspberry Pi użyj systemowego Chromium
+    const isRaspberryPi = os.arch() === 'arm' || os.arch() === 'arm64';
+    const launchConfig = {
       headless: true,
       args: [
         "--no-sandbox",
@@ -34,7 +37,13 @@ async function ensureBrowser() {
         "--disable-gpu",
         "--disable-dev-shm-usage",
       ],
-    });
+    };
+    
+    if (isRaspberryPi) {
+      launchConfig.executablePath = '/usr/bin/chromium-browser';
+    }
+    
+    browser = await puppeteer.launch(launchConfig);
   }
   return browser;
 }
