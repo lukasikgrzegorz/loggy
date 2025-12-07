@@ -172,27 +172,9 @@ app.patch("/api/links/:url/check", async (req, res) => {
   }
 });
 
-// POST /api/run - Uruchom nowy run sprawdzający konkurencję
+// POST /api/run - Uruchom nowy run sprawdzający konkurencję (tylko dla zgodnośći API)
 app.post("/api/run", async (req, res) => {
-  try {
-    // Utwórz nowy run
-    const runId = crypto.randomUUID();
-    const { error: runError } = await supabase
-      .from("log_runs")
-      .insert({ id: runId });
-
-    if (runError) throw runError;
-
-    // Uruchom sprawdzanie w tle
-    checkAllLinks(runId).catch((err) => {
-      console.error("Background check failed:", err);
-    });
-
-    res.json({ runId, message: "Run started in background" });
-  } catch (err) {
-    console.error("Error starting run:", err);
-    res.status(500).json({ error: err.message });
-  }
+  res.json({ message: "Automatic runs are enabled. Check is running continuously." });
 });
 
 // GET /api/runs - Pobierz historię runów
@@ -231,15 +213,66 @@ app.get("/api/history", async (req, res) => {
 
 // ============== GŁÓWNA LOGIKA SPRAWDZANIA ==============
 
-async function checkAllLinks(runId) {
-  try {
-    // Pobierz linki do sprawdzenia (pomijamy te z enemy=true)
-    const { data: links, error } = await supabase
-      .from("log_current_links")
-      .select("*")
-      .eq("enemy", false);
+let isRunning = false;
 
-    if (error) throw error;
+async function continuousCheckLoop() {
+  console.log("🔄 Starting continuous check loop...");
+  
+  while (true) {
+    try {
+      if (isRunning) {
+        console.log("⏳ Previous run still in progress, waiting...");
+        await sleep(5000);
+        continue;
+      }
+
+      // Pobierz linki do sprawdzenia (pomijamy te z enemy=true)
+      const { data: links, error } = await supabase
+        .from("log_current_links")
+        .select("*")
+        .eq("enemy", false);
+
+      if (error) {
+        console.error("Error fetching links:", error);
+        await sleep(10000); // Odczekaj 10s przy błędzie
+        continue;
+      }
+
+      // Jeśli lista jest pusta lub wszystkie są enemy=true, czekaj 10 minut
+      if (!links || links.length === 0) {
+        console.log("📋 No links to check. Waiting 10 minutes...");
+        await sleep(10 * 60 * 1000); // 10 minut
+        continue;
+      }
+
+      // Uruchom sprawdzanie
+      const runId = crypto.randomUUID();
+      console.log(`🚀 Starting run ${runId} for ${links.length} links`);
+      
+      await checkAllLinks(runId, links);
+      
+      console.log(`✅ Run ${runId} completed. Starting next run...`);
+      
+      // Krótkie opóźnienie przed następnym runem
+      await sleep(2000);
+      
+    } catch (err) {
+      console.error("Error in continuous loop:", err);
+      await sleep(10000); // Odczekaj 10s przy błędzie
+    }
+  }
+}
+
+async function checkAllLinks(runId, links) {
+  isRunning = true;
+  
+  try {
+    // Utwórz nowy run
+    const { error: runError } = await supabase
+      .from("log_runs")
+      .insert({ id: runId });
+
+    if (runError) throw runError;
 
     console.log(`Run ${runId}: Checking ${links.length} links`);
 
@@ -257,6 +290,8 @@ async function checkAllLinks(runId) {
     console.log(`Run ${runId}: Completed`);
   } catch (err) {
     console.error(`Run ${runId}: Error:`, err);
+  } finally {
+    isRunning = false;
   }
 }
 
@@ -336,4 +371,9 @@ process.on("SIGTERM", shutdown);
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  
+  // Uruchom ciągłe sprawdzanie w tle
+  continuousCheckLoop().catch(err => {
+    console.error("Fatal error in continuous check loop:", err);
+  });
 });
