@@ -285,7 +285,7 @@
               <th>URL</th>
               <th>Status</th>
               <th>Błąd</th>
-              <th>Dodano</th>
+              <th>Ostatnio sprawdzano</th>
               <th class="checkbox-cell">Obsłużone</th>
             </tr>
           </thead>
@@ -336,13 +336,23 @@
       
       try {
         const res = await fetch('/api/links');
-        const links = await res.json();
+        let links = await res.json();
         
         if (links.length === 0) {
           tbody.innerHTML = '<tr><td colspan="5" class="loading">Brak linków. Dodaj nowe w zakładce "Aktualizacja Listy".</td></tr>';
           updateStats(links);
           return;
         }
+        
+        // Sortowanie: konkurencja na górze, potem po dacie modyfikacji (najnowsze pierwsze)
+        links.sort((a, b) => {
+          if (a.enemy && !b.enemy) return -1;
+          if (!a.enemy && b.enemy) return 1;
+          
+          const dateA = new Date(a.modified || a.created || 0);
+          const dateB = new Date(b.modified || b.created || 0);
+          return dateB - dateA;
+        });
         
         tbody.innerHTML = links.map(link => `
           <tr>
@@ -353,7 +363,7 @@
               ${getStatusBadge(link)}
             </td>
             <td>${link.error ? `<span style="color: #dc3545; font-size: 12px;">${link.error}</span>` : '-'}</td>
-            <td>${formatDate(link.created)}</td>
+            <td>${formatDate(link.modified || link.created)}</td>
             <td class="checkbox-cell">
               <input type="checkbox" 
                      ${link.checked ? 'checked' : ''} 
