@@ -271,6 +271,24 @@
       font-size: 14px;
       margin-top: 5px;
     }
+    
+    .btn-delete {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    
+    .btn-delete:hover {
+      background-color: #f8d7da;
+    }
+    
+    .btn-delete:active {
+      background-color: #f5c6cb;
+    }
   </style>
 </head>
 <body>
@@ -320,11 +338,12 @@
               <th>Komentarz</th>
               <th>Ostatnio sprawdzano</th>
               <th class="checkbox-cell">Obsłużone</th>
+              <th class="checkbox-cell">Usuń</th>
             </tr>
           </thead>
           <tbody id="links-tbody">
             <tr>
-              <td colspan="6" class="loading">Ładowanie...</td>
+              <td colspan="7" class="loading">Ładowanie...</td>
             </tr>
           </tbody>
         </table>
@@ -387,7 +406,7 @@
         let links = await res.json();
         
         if (links.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="6" class="loading">Brak linków. Dodaj nowe w zakładce "Aktualizacja Listy".</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" class="loading">Brak linków. Dodaj nowe w zakładce "Aktualizacja Listy".</td></tr>';
           updateStats(links);
           return;
         }
@@ -430,12 +449,19 @@
                      ${link.checked ? 'checked' : ''} 
                      onchange="toggleChecked('${encodeURIComponent(link.url)}', this.checked)">
             </td>
+            <td class="checkbox-cell">
+              <button class="btn-delete" 
+                      onclick="deleteLink('${encodeURIComponent(link.url)}', ${link.ended}, this)"
+                      title="Usuń link">
+                🗑️
+              </button>
+            </td>
           </tr>
         `).join('');
         
         updateStats(links);
       } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="6" class="error">Błąd: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="error">Błąd: ${err.message}</td></tr>`;
       }
     }
     
@@ -475,6 +501,42 @@
       document.getElementById('stat-ended').textContent = ended;
     }
     
+    function updateStatsFromDOM() {
+      const tbody = document.getElementById('links-tbody');
+      const rows = tbody.querySelectorAll('tr');
+      
+      let total = 0;
+      let enemy = 0;
+      let ended = 0;
+      let pending = 0;
+      
+      rows.forEach(row => {
+        // Pomiń wiersze z komunikatami (loading, error, etc.)
+        if (row.cells.length < 7) return;
+        
+        total++;
+        
+        const statusCell = row.cells[1];
+        const checkboxCell = row.cells[5];
+        
+        if (statusCell.textContent.includes('Konkurencja')) {
+          enemy++;
+        } else if (statusCell.textContent.includes('Zakończone')) {
+          ended++;
+        } else {
+          const checkbox = checkboxCell.querySelector('input[type="checkbox"]');
+          if (checkbox && !checkbox.checked) {
+            pending++;
+          }
+        }
+      });
+      
+      document.getElementById('stat-total').textContent = total;
+      document.getElementById('stat-enemy').textContent = enemy;
+      document.getElementById('stat-pending').textContent = pending;
+      document.getElementById('stat-ended').textContent = ended;
+    }
+    
     async function toggleChecked(url, checked) {
       try {
         await fetch(`/api/links/${url}/check`, {
@@ -485,6 +547,45 @@
       } catch (err) {
         alert('Błąd aktualizacji: ' + err.message);
         loadLinks(); // Odśwież
+      }
+    }
+    
+    async function deleteLink(encodedUrl, isEnded = false, buttonElement = null) {
+      const url = decodeURIComponent(encodedUrl);
+      
+      // Dla zakończonych ofert nie pytaj o potwierdzenie
+      if (!isEnded && !confirm(`Czy na pewno chcesz usunąć ten link?\n\n${url}`)) {
+        return;
+      }
+      
+      try {
+        const response = await fetch(`/api/links/${encodedUrl}`, {
+          method: 'DELETE'
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        
+        // Usuń wiersz z DOM zamiast odświeżać całą stronę
+        if (buttonElement) {
+          const row = buttonElement.closest('tr');
+          if (row) {
+            row.style.transition = 'opacity 0.3s ease-out';
+            row.style.opacity = '0';
+            setTimeout(() => {
+              row.remove();
+              // Aktualizuj statystyki po usunięciu
+              updateStatsFromDOM();
+            }, 300);
+          }
+        } else {
+          // Fallback - odśwież jeśli nie ma referencji do przycisku
+          loadLinks();
+        }
+        
+      } catch (err) {
+        alert('Błąd usuwania linku: ' + err.message);
       }
     }
     

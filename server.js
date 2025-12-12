@@ -234,6 +234,24 @@ app.patch("/api/links/:url/comment", async (req, res) => {
   }
 });
 
+// DELETE /api/links/:url - Usuń link
+app.delete("/api/links/:url", async (req, res) => {
+  try {
+    const url = decodeURIComponent(req.params.url);
+
+    const { error } = await supabase
+      .from("log_current_links")
+      .delete()
+      .eq("url", url);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error deleting link:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/run - Uruchom nowy run sprawdzający konkurencję (tylko dla zgodnośći API)
 app.post("/api/run", async (req, res) => {
   res.json({ message: "Automatic runs are enabled. Check is running continuously." });
