@@ -164,8 +164,14 @@ app.post("/api/links/update", async (req, res) => {
     const currentUrls = new Set(currentLinks.map((l) => l.url));
     const newUrls = new Set(urls.filter((u) => u.trim()));
 
+    console.log('🔍 Update links debug:');
+    console.log('   Received urls:', urls);
+    console.log('   Current URLs:', [...currentUrls]);
+    console.log('   New URLs:', [...newUrls]);
+
     // Dodaj nowe linki
     const toInsert = [...newUrls].filter((url) => !currentUrls.has(url));
+    console.log('   To insert:', toInsert);
     if (toInsert.length > 0) {
       const { error: insertError } = await supabase
         .from("log_current_links")
@@ -176,13 +182,32 @@ app.post("/api/links/update", async (req, res) => {
 
     // Usuń brakujące linki
     const toDelete = [...currentUrls].filter((url) => !newUrls.has(url));
+    console.log('   To delete:', toDelete);
     if (toDelete.length > 0) {
-      const { error: deleteError } = await supabase
-        .from("log_current_links")
-        .delete()
-        .in("url", toDelete);
+      // Jeśli usuwamy wszystkie linki, użyj prostszego zapytania
+      if (newUrls.size === 0) {
+        console.log('   Deleting ALL links with simple query');
+        const { error: deleteError } = await supabase
+          .from("log_current_links")
+          .delete()
+          .neq("url", ""); // usuwa wszystkie rekordy gdzie url != "" (czyli wszystkie)
+        
+        if (deleteError) throw deleteError;
+      } else {
+        // Usuń w mniejszych batch'ach żeby uniknąć "URI too long"
+        const BATCH_SIZE = 50;
+        for (let i = 0; i < toDelete.length; i += BATCH_SIZE) {
+          const batch = toDelete.slice(i, i + BATCH_SIZE);
+          console.log(`   Deleting batch ${i / BATCH_SIZE + 1}: ${batch.length} URLs`);
+          
+          const { error: deleteError } = await supabase
+            .from("log_current_links")
+            .delete()
+            .in("url", batch);
 
-      if (deleteError) throw deleteError;
+          if (deleteError) throw deleteError;
+        }
+      }
     }
 
     res.json({

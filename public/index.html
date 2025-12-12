@@ -316,11 +316,11 @@
         </div>
         <div class="stat-card">
           <div class="stat-value" id="stat-enemy">0</div>
-          <div class="stat-label">Konkurencja znaleziona</div>
+          <div class="stat-label">Konkurencja</div>
         </div>
         <div class="stat-card">
           <div class="stat-value" id="stat-pending">0</div>
-          <div class="stat-label">Do sprawdzenia</div>
+          <div class="stat-label">Sprawdzane</div>
         </div>
         <div class="stat-card">
           <div class="stat-value" id="stat-ended">0</div>
@@ -356,7 +356,8 @@
         <button class="btn btn-primary" onclick="updateLinks()">💾 AKTUALIZUJ</button>
         <div class="info">
           Wklej listę linków (jeden na linię). Nowe linki zostaną dodane, brakujące usunięte.<br>
-          <strong>💡 Automatyzacja:</strong> Jeśli link nie zawiera słowa "offers", zostanie automatycznie dodane "/offers" na końcu.
+          <strong>💡 Automatyzacja:</strong> Jeśli link nie zawiera słowa "offers", zostanie automatycznie dodane "/offers" na końcu.<br>
+          <strong>🗑️ Usuwanie wszystkich:</strong> Pozostaw pole puste aby usunąć wszystkie linki z systemu.
         </div>
       </div>
       
@@ -644,8 +645,8 @@
           return url;
         });
       
-      if (urls.length === 0) {
-        alert('Dodaj przynajmniej jeden link!');
+      // Pozwól na puste listy - usunięcie wszystkich linków
+      if (urls.length === 0 && !confirm('Lista jest pusta. Czy na pewno chcesz usunąć wszystkie linki?')) {
         return;
       }
       
