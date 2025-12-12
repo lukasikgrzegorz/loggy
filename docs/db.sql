@@ -5,6 +5,8 @@ create table public.log_current_links (
   checked boolean null default false,
   created timestamp with time zone null default now(),
   modified timestamp with time zone null default now(),
+  comment text null,
+  ended boolean null default false,
   constraint log_current_links_pkey primary key (url),
   constraint log_current_links_url_key unique (url)
 ) TABLESPACE pg_default;

@@ -18,7 +18,7 @@
     }
     
     .container {
-      max-width: 1200px;
+      max-width: 1600px;
       margin: 0 auto;
     }
     
@@ -220,6 +220,32 @@
       text-decoration: underline;
     }
     
+    .comment-cell {
+      max-width: 400px;
+    }
+    
+    .comment-input {
+      width: 100%;
+      padding: 6px 10px;
+      border: 1px solid #dee2e6;
+      border-radius: 4px;
+      font-size: 13px;
+      font-family: inherit;
+      background: white;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    
+    .comment-input:focus {
+      outline: none;
+      border-color: #007bff;
+      box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+    }
+    
+    .comment-input::placeholder {
+      color: #999;
+      font-style: italic;
+    }
+    
     .stats {
       display: flex;
       gap: 20px;
@@ -278,6 +304,10 @@
           <div class="stat-value" id="stat-pending">0</div>
           <div class="stat-label">Do sprawdzenia</div>
         </div>
+        <div class="stat-card">
+          <div class="stat-value" id="stat-ended">0</div>
+          <div class="stat-label">Zakończone</div>
+        </div>
       </div>
       
       <div class="table-container">
@@ -287,13 +317,14 @@
               <th>URL</th>
               <th>Status</th>
               <th>Błąd</th>
+              <th>Komentarz</th>
               <th>Ostatnio sprawdzano</th>
               <th class="checkbox-cell">Obsłużone</th>
             </tr>
           </thead>
           <tbody id="links-tbody">
             <tr>
-              <td colspan="5" class="loading">Ładowanie...</td>
+              <td colspan="6" class="loading">Ładowanie...</td>
             </tr>
           </tbody>
         </table>
@@ -305,11 +336,14 @@
       <div class="controls">
         <button class="btn btn-primary" onclick="updateLinks()">💾 AKTUALIZUJ</button>
         <div class="info">
-          Wklej listę linków (jeden na linię). Nowe linki zostaną dodane, brakujące usunięte.
+          Wklej listę linków (jeden na linię). Nowe linki zostaną dodane, brakujące usunięte.<br>
+          <strong>💡 Automatyzacja:</strong> Jeśli link nie zawiera słowa "offers", zostanie automatycznie dodane "/offers" na końcu.
         </div>
       </div>
       
-      <textarea id="urls-textarea" placeholder="https://example.com/page1&#10;https://example.com/page2&#10;https://example.com/page3"></textarea>
+      <textarea id="urls-textarea" placeholder="https://example.com/page1&#10;https://example.com/page2&#10;https://example.com/page3" 
+                onpaste="setTimeout(processUrlsInTextarea, 10)" 
+                onblur="processUrlsInTextarea()"></textarea>
       
       <div id="update-result"></div>
     </div>
@@ -335,9 +369,9 @@
       if (viewName === 'list') {
         loadLinks();
         // Uruchom auto-refresh co 60 sekund tylko dla widoku list
-        refreshInterval = setInterval(() => {
-          loadLinks();
-        }, 15000);
+        // WYŁĄCZONE: refreshInterval = setInterval(() => {
+        //   loadLinks();
+        // }, 15000);
       } else if (viewName === 'update') {
         loadLinksForUpdate();
       }
@@ -346,30 +380,36 @@
     // ============== AKTUALNA LISTA ==============
     async function loadLinks() {
       const tbody = document.getElementById('links-tbody');
-      tbody.innerHTML = '<tr><td colspan="5" class="loading">Ładowanie...</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="loading">Ładowanie...</td></tr>';
       
       try {
         const res = await fetch('/api/links');
         let links = await res.json();
         
         if (links.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="5" class="loading">Brak linków. Dodaj nowe w zakładce "Aktualizacja Listy".</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="6" class="loading">Brak linków. Dodaj nowe w zakładce "Aktualizacja Listy".</td></tr>';
           updateStats(links);
           return;
         }
         
-        // Sortowanie: konkurencja na górze, potem po dacie modyfikacji (najnowsze pierwsze)
+        // Sortowanie: konkurencja na górze, potem aktywne, na końcu zakończone
         links.sort((a, b) => {
+          // Najpierw konkurencja
           if (a.enemy && !b.enemy) return -1;
           if (!a.enemy && b.enemy) return 1;
           
+          // Potem zakończone na koniec
+          if (a.ended && !b.ended) return 1;
+          if (!a.ended && b.ended) return -1;
+          
+          // W ramach tej samej kategorii sortuj po dacie modyfikacji
           const dateA = new Date(a.modified || a.created || 0);
           const dateB = new Date(b.modified || b.created || 0);
           return dateB - dateA;
         });
         
         tbody.innerHTML = links.map(link => `
-          <tr>
+          <tr ${link.ended ? 'style="opacity: 0.6; background-color: #f8f9fa;"' : ''}>
             <td class="url-cell">
               <a href="${link.url}" target="_blank" class="url-link">${link.url}</a>
             </td>
@@ -377,6 +417,13 @@
               ${getStatusBadge(link)}
             </td>
             <td>${link.error ? `<span style="color: #dc3545; font-size: 12px;">${link.error}</span>` : '-'}</td>
+            <td class="comment-cell">
+              <input type="text" class="comment-input" 
+                     value="${link.comment ? escapeHtml(link.comment) : ''}"
+                     placeholder="Dodaj komentarz..."
+                     onkeydown="handleCommentKeydown(event, '${encodeURIComponent(link.url)}')"
+                     onblur="saveCommentOnBlur(event, '${encodeURIComponent(link.url)}')">
+            </td>
             <td>${formatDate(link.modified || link.created)}</td>
             <td class="checkbox-cell">
               <input type="checkbox" 
@@ -388,12 +435,14 @@
         
         updateStats(links);
       } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="5" class="error">Błąd: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" class="error">Błąd: ${err.message}</td></tr>`;
       }
     }
     
     function getStatusBadge(link) {
-      if (link.enemy) {
+      if (link.ended) {
+        return '<span class="status-badge status-error">🔚 Zakończone</span>';
+      } else if (link.enemy) {
         return '<span class="status-badge status-enemy">⚠️ Konkurencja</span>';
       } else if (link.error) {
         return '<span class="status-badge status-error">⚠️ Błąd</span>';
@@ -417,11 +466,13 @@
     function updateStats(links) {
       const total = links.length;
       const enemy = links.filter(l => l.enemy).length;
-      const pending = links.filter(l => !l.enemy && !l.checked).length;
+      const ended = links.filter(l => l.ended).length;
+      const pending = links.filter(l => !l.enemy && !l.ended && !l.checked).length;
       
       document.getElementById('stat-total').textContent = total;
       document.getElementById('stat-enemy').textContent = enemy;
       document.getElementById('stat-pending').textContent = pending;
+      document.getElementById('stat-ended').textContent = ended;
     }
     
     async function toggleChecked(url, checked) {
@@ -438,6 +489,33 @@
     }
     
     // ============== AKTUALIZACJA LISTY ==============
+    function processUrlsInTextarea() {
+      const textarea = document.getElementById('urls-textarea');
+      const urls = textarea.value
+        .split('\n')
+        .map(url => {
+          const trimmedUrl = url.trim();
+          if (trimmedUrl.length === 0) return url; // Zachowaj puste linie
+          
+          // Jeśli URL nie zawiera słowa "offers", dodaj /offers na końcu
+          if (!trimmedUrl.includes('offers')) {
+            // Usuń końcowy slash jeśli istnieje, a następnie dodaj /offers
+            const processedUrl = trimmedUrl.replace(/\/$/, '') + '/offers';
+            return url.replace(trimmedUrl, processedUrl); // Zachowaj oryginalne białe znaki
+          }
+          return url;
+        })
+        .join('\n');
+      
+      // Aktualizuj textarea tylko jeśli coś się zmieniło
+      if (textarea.value !== urls) {
+        const cursorPos = textarea.selectionStart;
+        textarea.value = urls;
+        // Przywróć pozycję kursora (w przybliżeniu)
+        textarea.setSelectionRange(cursorPos, cursorPos);
+      }
+    }
+
     async function loadLinksForUpdate() {
       try {
         const res = await fetch('/api/links');
@@ -455,7 +533,15 @@
       const urls = textarea.value
         .split('\n')
         .map(u => u.trim())
-        .filter(u => u.length > 0);
+        .filter(u => u.length > 0)
+        .map(url => {
+          // Jeśli URL nie zawiera słowa "offers", dodaj /offers na końcu
+          if (!url.includes('offers')) {
+            // Usuń końcowy slash jeśli istnieje, a następnie dodaj /offers
+            return url.replace(/\/$/, '') + '/offers';
+          }
+          return url;
+        });
       
       if (urls.length === 0) {
         alert('Dodaj przynajmniej jeden link!');
@@ -499,6 +585,66 @@
       }
     }
     
+    // ============== KOMENTARZE ==============
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+    
+    // Globalna zmienna do przechowywania oryginalnych wartości
+    let originalCommentValues = {};
+    
+    function handleCommentKeydown(event, encodedUrl) {
+      const input = event.target;
+      
+      // Zapisz oryginalną wartość przy pierwszym focusie
+      if (!(encodedUrl in originalCommentValues)) {
+        originalCommentValues[encodedUrl] = input.value;
+      }
+      
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        saveComment(encodedUrl, input.value.trim(), input);
+      } else if (event.key === 'Escape') {
+        // Przywróć oryginalną wartość
+        input.value = originalCommentValues[encodedUrl] || '';
+        input.blur();
+      }
+    }
+    
+    function saveCommentOnBlur(event, encodedUrl) {
+      const input = event.target;
+      const currentValue = input.value.trim();
+      const originalValue = originalCommentValues[encodedUrl] || '';
+      
+      // Zapisz tylko jeśli wartość się zmieniła
+      if (currentValue !== originalValue.trim()) {
+        saveComment(encodedUrl, currentValue, input);
+      }
+    }
+    
+    async function saveComment(encodedUrl, comment, inputElement) {
+      try {
+        const response = await fetch(`/api/links/${encodedUrl}/comment`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ comment: comment })
+        });
+        
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        
+        // Zaktualizuj oryginalną wartość po udanym zapisaniu
+        originalCommentValues[encodedUrl] = comment;
+        
+      } catch (err) {
+        alert('Błąd zapisywania komentarza: ' + err.message);
+        // Przywróć oryginalną wartość w przypadku błędu
+        inputElement.value = originalCommentValues[encodedUrl] || '';
+      }
+    }
+
     // ============== INIT ==============
     window.addEventListener('DOMContentLoaded', () => {
       loadLinks();

@@ -11,7 +11,10 @@ const app = express();
 app.use(express.json());
 app.use(express.static("public"));
 
-let browser;
+let browserPool = [];
+const CONNECTION_POOL_SIZE = parseInt(process.env.CONNECTION_POOL_SIZE) || 1;
+const PAGE_TIMEOUT = parseInt(process.env.PAGE_TIMEOUT) || 60000;
+const IDLE_SLEEP_TIMEOUT = parseInt(process.env.IDLE_SLEEP_TIMEOUT) || 600000;
 
 // Supabase client
 const supabase = createClient(
@@ -25,27 +28,54 @@ const ENEMY_IDS = process.env.ENEMY ? process.env.ENEMY.split(",") : [];
 // helper sleep
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function ensureBrowser() {
-  if (!browser) {
-    // Na Raspberry Pi użyj systemowego Chromium
-    const isRaspberryPi = os.arch() === 'arm' || os.arch() === 'arm64';
-    const launchConfig = {
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-gpu",
-        "--disable-dev-shm-usage",
-      ],
-    };
-    
-    if (isRaspberryPi) {
-      launchConfig.executablePath = '/usr/bin/chromium-browser';
-    }
-    
-    browser = await puppeteer.launch(launchConfig);
+async function initializeBrowserPool() {
+  console.log(`🚀 Initializing browser pool with ${CONNECTION_POOL_SIZE} instances...`);
+  
+  // Na Raspberry Pi użyj systemowego Chromium
+  const isRaspberryPi = os.arch() === 'arm' || os.arch() === 'arm64';
+  const launchConfig = {
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-gpu",
+      "--disable-dev-shm-usage",
+    ],
+  };
+  
+  if (isRaspberryPi) {
+    launchConfig.executablePath = '/usr/bin/chromium-browser';
   }
-  return browser;
+  
+  for (let i = 0; i < CONNECTION_POOL_SIZE; i++) {
+    try {
+      const browser = await puppeteer.launch(launchConfig);
+      browserPool.push({ browser, inUse: false });
+      console.log(`✅ Browser ${i + 1}/${CONNECTION_POOL_SIZE} initialized`);
+    } catch (err) {
+      console.error(`❌ Failed to initialize browser ${i + 1}:`, err);
+    }
+  }
+  
+  console.log(`🎉 Browser pool initialized with ${browserPool.length} instances`);
+}
+
+async function getBrowserFromPool() {
+  // Znajdź pierwszy dostępny browser
+  const availableBrowser = browserPool.find(item => !item.inUse);
+  
+  if (availableBrowser) {
+    availableBrowser.inUse = true;
+    return availableBrowser;
+  }
+  
+  // Jeśli wszystkie są zajęte, czekaj
+  await sleep(100);
+  return getBrowserFromPool();
+}
+
+function releaseBrowserToPool(browserItem) {
+  browserItem.inUse = false;
 }
 
 // GET /fetch?url=https://example.com
@@ -57,10 +87,10 @@ app.get("/fetch", async (req, res) => {
   }
 
   let page;
+  let browserItem;
   try {
-    await ensureBrowser();
-
-    page = await browser.newPage();
+    browserItem = await getBrowserFromPool();
+    page = await browserItem.browser.newPage();
 
     // realistyczny User-Agent
     await page.setUserAgent(
@@ -70,10 +100,10 @@ app.get("/fetch", async (req, res) => {
     await page.setViewport({ width: 1280, height: 800 });
 
     // załaduj stronę
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+    await page.goto(url, { waitUntil: "networkidle2", timeout: PAGE_TIMEOUT });
 
     // czekaj na React root (jeśli jest) lub body
-    await page.waitForSelector("#root, body", { timeout: 60000 });
+    await page.waitForSelector("#root, body", { timeout: PAGE_TIMEOUT });
 
     // dodatkowe krótkie opóźnienie, żeby JS się zakończył
     await sleep(1500);
@@ -82,11 +112,15 @@ app.get("/fetch", async (req, res) => {
     const html = await page.evaluate(() => document.documentElement.outerHTML);
 
     await page.close();
+    releaseBrowserToPool(browserItem);
 
     res.json({ url, html });
   } catch (err) {
     if (page && !page.isClosed()) {
       try { await page.close(); } catch(e) {}
+    }
+    if (browserItem) {
+      releaseBrowserToPool(browserItem);
     }
     console.error("Fetch error:", err);
     res.status(500).json({ error: "Failed to fetch page", details: err.message });
@@ -181,6 +215,25 @@ app.patch("/api/links/:url/check", async (req, res) => {
   }
 });
 
+// PATCH /api/links/:url/comment - Aktualizuj komentarz linka
+app.patch("/api/links/:url/comment", async (req, res) => {
+  try {
+    const url = decodeURIComponent(req.params.url);
+    const { comment } = req.body;
+
+    const { error } = await supabase
+      .from("log_current_links")
+      .update({ comment, modified: new Date().toISOString() })
+      .eq("url", url);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error updating comment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/run - Uruchom nowy run sprawdzający konkurencję (tylko dla zgodnośći API)
 app.post("/api/run", async (req, res) => {
   res.json({ message: "Automatic runs are enabled. Check is running continuously." });
@@ -235,11 +288,12 @@ async function continuousCheckLoop() {
         continue;
       }
 
-      // Pobierz linki do sprawdzenia (pomijamy te z enemy=true)
+      // Pobierz linki do sprawdzenia (pomijamy te z enemy=true i ended=true)
       const { data: links, error } = await supabase
         .from("log_current_links")
         .select("*")
-        .eq("enemy", false);
+        .eq("enemy", false)
+        .eq("ended", false);
 
       if (error) {
         console.error("Error fetching links:", error);
@@ -247,10 +301,10 @@ async function continuousCheckLoop() {
         continue;
       }
 
-      // Jeśli lista jest pusta lub wszystkie są enemy=true, czekaj 10 minut
+      // Jeśli lista jest pusta lub wszystkie są enemy=true, czekaj określony czas
       if (!links || links.length === 0) {
-        console.log("📋 No links to check. Waiting 10 minutes...");
-        await sleep(10 * 60 * 1000); // 10 minut
+        console.log(`📋 No links to check. Waiting ${IDLE_SLEEP_TIMEOUT / 60000} minutes...`);
+        await sleep(IDLE_SLEEP_TIMEOUT);
         continue;
       }
 
@@ -283,11 +337,23 @@ async function checkAllLinks(runId, links) {
 
     if (runError) throw runError;
 
-    console.log(`Run ${runId}: Checking ${links.length} links`);
+    console.log(`Run ${runId}: Checking ${links.length} links with ${CONNECTION_POOL_SIZE} concurrent connections`);
 
-    for (const link of links) {
-      await checkSingleLink(runId, link);
-      await sleep(1000); // Opóźnienie między requestami
+    // Podziel linki na chunki odpowiadające wielkości puli
+    const chunks = [];
+    for (let i = 0; i < links.length; i += CONNECTION_POOL_SIZE) {
+      chunks.push(links.slice(i, i + CONNECTION_POOL_SIZE));
+    }
+
+    // Przetwarzaj chunki równolegle
+    for (const chunk of chunks) {
+      const promises = chunk.map(link => checkSingleLink(runId, link));
+      await Promise.all(promises);
+      
+      // Krótkie opóźnienie między chunkami
+      if (chunks.indexOf(chunk) < chunks.length - 1) {
+        await sleep(500);
+      }
     }
 
     // Zamknij run
@@ -306,33 +372,42 @@ async function checkAllLinks(runId, links) {
 
 async function checkSingleLink(runId, link) {
   let enemy = false;
+  let ended = false;
   let error = null;
   let page;
+  let browserItem;
 
   try {
-    await ensureBrowser();
-    page = await browser.newPage();
+    browserItem = await getBrowserFromPool();
+    page = await browserItem.browser.newPage();
 
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
     );
     await page.setViewport({ width: 1280, height: 800 });
 
-    await page.goto(link.url, { waitUntil: "networkidle2", timeout: 60000 });
-    await page.waitForSelector("#root, body", { timeout: 60000 });
+    await page.goto(link.url, { waitUntil: "networkidle2", timeout: PAGE_TIMEOUT });
+    await page.waitForSelector("#root, body", { timeout: PAGE_TIMEOUT });
     await sleep(1500);
 
     const html = await page.evaluate(() => document.documentElement.outerHTML);
 
-    // Sprawdź czy występują ID konkurencji
-    for (const enemyId of ENEMY_IDS) {
-      if (html.includes(enemyId.trim())) {
-        enemy = true;
-        break;
+    // Sprawdź czy ogłoszenie jest nieaktualne
+    if (html.includes("Ogłoszenie nieaktualne")) {
+      ended = true;
+      console.log(`🔚 Link ${link.url} marked as ended (found "Ogłoszenie nieaktualne")`);
+    } else {
+      // Sprawdź czy występują ID konkurencji tylko jeśli ogłoszenie jest aktualne
+      for (const enemyId of ENEMY_IDS) {
+        if (html.includes(enemyId.trim())) {
+          enemy = true;
+          break;
+        }
       }
     }
 
     await page.close();
+    releaseBrowserToPool(browserItem);
   } catch (err) {
     error = err.message;
     console.error(`Error checking ${link.url}:`, err.message);
@@ -340,6 +415,9 @@ async function checkSingleLink(runId, link) {
       try {
         await page.close();
       } catch (e) {}
+    }
+    if (browserItem) {
+      releaseBrowserToPool(browserItem);
     }
   }
 
@@ -356,6 +434,7 @@ async function checkSingleLink(runId, link) {
     .from("log_current_links")
     .update({
       enemy,
+      ended,
       error,
       modified: new Date().toISOString(),
     })
@@ -366,8 +445,11 @@ async function checkSingleLink(runId, link) {
 async function shutdown() {
   try {
     console.log("Shutting down...");
-    if (browser) {
-      await browser.close();
+    // Zamknij wszystkie przeglądarki w puli
+    for (const browserItem of browserPool) {
+      if (browserItem.browser) {
+        await browserItem.browser.close();
+      }
     }
     process.exit(0);
   } catch (e) {
@@ -378,8 +460,11 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  
+  // Inicjalizuj pulę przeglądarek
+  await initializeBrowserPool();
   
   // Uruchom ciągłe sprawdzanie w tle
   continuousCheckLoop().catch(err => {
