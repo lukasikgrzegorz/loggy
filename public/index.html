@@ -499,11 +499,16 @@
     <!-- Widok: Aktualizacja Listy -->
     <div id="view-update" class="view">
       <div class="controls">
-        <button class="btn btn-primary" onclick="updateLinks()">💾 AKTUALIZUJ</button>
-        <div class="info">
+        <button class="btn btn-primary" onclick="updateLinks()" id="update-btn">💾 AKTUALIZUJ</button>
+        <div class="info" id="update-info">
           Wklej listę linków (jeden na linię). Nowe linki zostaną dodane, brakujące usunięte.<br>
           <strong>💡 Automatyzacja:</strong> Jeśli link nie zawiera słowa "offers", zostanie automatycznie dodane "/offers" na końcu.<br>
           <strong>🗑️ Usuwanie wszystkich:</strong> Pozostaw pole puste aby usunąć wszystkie linki z systemu.
+        </div>
+        <div class="info" id="sheet-mode-info" style="display: none; background: #fff3cd; border-left-color: #ffc107; color: #856404;">
+          <strong>📊 Tryb Google Sheets</strong><br>
+          Ręczna aktualizacja linków jest wyłączona. Linki są automatycznie pobierane z arkusza Google Sheets.<br>
+          <span id="sheet-url-info"></span>
         </div>
       </div>
       
@@ -516,6 +521,9 @@
   </div> <!-- End of app-container -->
 
   <script>
+    // ============== GLOBAL STATE ==============
+    let isSheetMode = false;
+    
     // ============== AUTH ==============
     async function checkAuth() {
       try {
@@ -523,13 +531,50 @@
         const data = await res.json();
         
         if (data.user) {
+          // Sprawdź tryb Google Sheets
+          isSheetMode = data.sheetMode || false;
           showApp(data.user);
+          await checkSheetMode();
         } else {
           showLogin();
         }
       } catch (err) {
         console.error('Auth check error:', err);
         showLogin();
+      }
+    }
+    
+    async function checkSheetMode() {
+      try {
+        const res = await fetch('/api/config');
+        const config = await res.json();
+        isSheetMode = config.sheetMode;
+        
+        if (isSheetMode) {
+          // Ukryj/zablokuj zakładkę aktualizacji
+          const updateBtn = document.getElementById('btn-update');
+          if (updateBtn) {
+            updateBtn.style.display = 'none';
+          }
+          
+          // Pokaż info w widoku aktualizacji
+          document.getElementById('update-info').style.display = 'none';
+          document.getElementById('sheet-mode-info').style.display = 'block';
+          
+          if (config.sheetUrl) {
+            document.getElementById('sheet-url-info').innerHTML = 
+              `Arkusz: <a href="${config.sheetUrl}" target="_blank" style="color: #856404; text-decoration: underline;">${config.sheetUrl}</a>`;
+          }
+          
+          // Zablokuj textarea i przycisk
+          document.getElementById('urls-textarea').disabled = true;
+          document.getElementById('urls-textarea').placeholder = 'Ręczna edycja wyłączona w trybie Google Sheets';
+          document.getElementById('update-btn').disabled = true;
+          document.getElementById('update-btn').style.opacity = '0.5';
+          document.getElementById('update-btn').style.cursor = 'not-allowed';
+        }
+      } catch (err) {
+        console.error('Error checking sheet mode:', err);
       }
     }
     
@@ -852,6 +897,20 @@
     }
     
     async function updateLinks() {
+      // Sprawdź tryb Google Sheets
+      if (isSheetMode) {
+        document.getElementById('update-result').innerHTML = `
+          <div class="error" style="margin-top: 20px;">
+            <strong>❌ Operacja niedozwolona</strong><br>
+            Ręczna aktualizacja linków jest wyłączona w trybie Google Sheets.
+          </div>
+        `;
+        setTimeout(() => {
+          document.getElementById('update-result').innerHTML = '';
+        }, 5000);
+        return;
+      }
+      
       const textarea = document.getElementById('urls-textarea');
       const urls = textarea.value
         .split('\n')
@@ -871,7 +930,7 @@
         return;
       }
       
-      const btn = event.target;
+      const btn = document.getElementById('update-btn');
       btn.disabled = true;
       btn.textContent = '⏳ Aktualizowanie...';
       
@@ -883,6 +942,10 @@
         });
         
         const result = await res.json();
+        
+        if (!res.ok) {
+          throw new Error(result.error || 'Błąd aktualizacji');
+        }
         
         document.getElementById('update-result').innerHTML = `
           <div class="info" style="background: #d4edda; border-color: #28a745; color: #155724; margin-top: 20px;">

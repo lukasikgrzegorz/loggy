@@ -5,6 +5,7 @@ Aplikacja do automatycznego śledzenia aktywności konkurencji na giełdzie popr
 ## 📋 Funkcjonalność
 
 - **🔐 Autentykacja użytkowników** - system logowania z Supabase Auth (server-side)
+- **📊 Google Sheets Integration** - automatyczne pobieranie URL-i z arkusza Google (opcjonalne)
 - **Zarządzanie listą linków** - dodawanie, usuwanie i aktualizacja URL-i do monitorowania
 - **Automatyczne sprawdzanie** - wykorzystanie Puppeteer do pobierania pełnej treści stron (po załadowaniu JavaScript)
 - **Detekcja konkurencji** - wyszukiwanie ID konkurencji w źródle strony
@@ -156,6 +157,30 @@ Aplikacja będzie dostępna pod adresem: `http://localhost:3000`
 - `SESSION_SECRET` - Klucz szyfrujący sesje (min. 32 znaki)
 - `ENEMY` - Lista ID konkurencji oddzielona przecinkami
 - `PORT` - Port serwera (domyślnie 3000)
+
+### Google Sheets Integration (opcjonalne)
+
+Loggy może automatycznie pobierać URL-e z arkusza Google Sheets! 
+
+**Funkcjonalność:**
+- ✅ Automatyczne pobieranie URL-i z arkusza (kolumny: url, data)
+- ✅ Filtrowanie rekordów z dzisiaj i 2 dni wstecz
+- ✅ Automatyczne dodawanie `/offers` do URL-i
+- ✅ Pomijanie duplikatów
+- ✅ Synchronizacja przed każdym sprawdzeniem (domyślnie co 5 min)
+- ✅ **Automatyczna blokada ręcznej edycji** - interfejs aktualizacji jest ukryty gdy aktywny tryb Google Sheets
+
+**⚠️ Uwaga:** Gdy `SHEET_UPDATE=true`, zakładka "Aktualizacja Listy" jest zablokowana. Wszystkie URL-e zarządzane są przez arkusz.
+
+**Dodatkowe zmienne środowiskowe:**
+- `SHEET_UPDATE` - włącz/wyłącz integrację (true/false)
+- `SHEET_URL` - URL do arkusza Google Sheets
+- `SHEET_RANGE` - zakres kolumn (domyślnie A:B)
+- `GOOGLE_SERVICE_ACCOUNT_EMAIL` - email Service Account
+- `GOOGLE_PRIVATE_KEY` - klucz prywatny Service Account
+- `SHEET_SYNC_INTERVAL` - interwał synchronizacji w ms (domyślnie 300000 = 5 min)
+
+📖 **Szczegółowa instrukcja konfiguracji:** `docs/GOOGLE_SHEETS_SETUP.md`
 
 ## 🔒 Bezpieczeństwo
 

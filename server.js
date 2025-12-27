@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import os from "os";
 import session from "express-session";
+import GoogleSheetWorker from "./googleSheetWorker.js";
 
 dotenv.config();
 
@@ -29,6 +30,7 @@ let browserPool = [];
 const CONNECTION_POOL_SIZE = parseInt(process.env.CONNECTION_POOL_SIZE) || 1;
 const PAGE_TIMEOUT = parseInt(process.env.PAGE_TIMEOUT) || 60000;
 const IDLE_SLEEP_TIMEOUT = parseInt(process.env.IDLE_SLEEP_TIMEOUT) || 600000;
+const SHEET_SYNC_INTERVAL = parseInt(process.env.SHEET_SYNC_INTERVAL) || 300000; // 5 minut domyślnie
 
 // Supabase client
 const supabase = createClient(
@@ -38,6 +40,9 @@ const supabase = createClient(
 
 // Lista ID konkurencji
 const ENEMY_IDS = process.env.ENEMY ? process.env.ENEMY.split(",") : [];
+
+// Google Sheets Worker
+const sheetWorker = new GoogleSheetWorker(supabase);
 
 // ============== AUTH MIDDLEWARE ==============
 function requireAuth(req, res, next) {
@@ -94,10 +99,21 @@ app.post('/api/auth/logout', (req, res) => {
 // GET /api/auth/session
 app.get('/api/auth/session', (req, res) => {
   if (req.session.user) {
-    res.json({ user: req.session.user });
+    res.json({ 
+      user: req.session.user,
+      sheetMode: process.env.SHEET_UPDATE === 'true'
+    });
   } else {
     res.json({ user: null });
   }
+});
+
+// GET /api/config - Pobierz konfigurację (czy włączony tryb Google Sheets)
+app.get('/api/config', requireAuth, (req, res) => {
+  res.json({
+    sheetMode: process.env.SHEET_UPDATE === 'true',
+    sheetUrl: process.env.SHEET_UPDATE === 'true' ? process.env.SHEET_URL : null
+  });
 });
 
 // helper sleep
@@ -223,6 +239,14 @@ app.get("/api/links", requireAuth, async (req, res) => {
 // POST /api/links/update - Aktualizuj listę linków
 app.post("/api/links/update", requireAuth, async (req, res) => {
   try {
+    // Blokuj aktualizację ręczną gdy włączony tryb Google Sheets
+    if (process.env.SHEET_UPDATE === 'true') {
+      return res.status(403).json({ 
+        error: "Ręczna aktualizacja linków jest wyłączona w trybie Google Sheets",
+        sheetMode: true
+      });
+    }
+
     const { urls } = req.body; // array of URLs
 
     if (!Array.isArray(urls)) {
@@ -394,12 +418,21 @@ app.get("/api/history", requireAuth, async (req, res) => {
 // ============== GŁÓWNA LOGIKA SPRAWDZANIA ==============
 
 let isRunning = false;
+let lastSheetSync = 0;
 
 async function continuousCheckLoop() {
   console.log("🔄 Starting continuous check loop...");
   
   while (true) {
     try {
+      // Sprawdź czy należy uruchomić worker Google Sheets
+      const now = Date.now();
+      if (sheetWorker.enabled && (now - lastSheetSync) >= SHEET_SYNC_INTERVAL) {
+        console.log('📊 Running Google Sheets sync before check run...');
+        await sheetWorker.run();
+        lastSheetSync = now;
+      }
+
       if (isRunning) {
         console.log("⏳ Previous run still in progress, waiting...");
         await sleep(5000);
@@ -474,12 +507,6 @@ async function checkAllLinks(runId, links) {
       }
     }
 
-    // Zamknij run
-    await supabase
-      .from("log_runs")
-      .update({ closed_at: new Date().toISOString() })
-      .eq("id", runId);
-
     console.log(`Run ${runId}: Completed`);
   } catch (err) {
     console.error(`Run ${runId}: Error:`, err);
@@ -539,13 +566,15 @@ async function checkSingleLink(runId, link) {
     }
   }
 
-  // Zapisz do historii
-  await supabase.from("log_links_history").insert({
-    run_id: runId,
-    url: link.url,
-    enemy,
-    error,
-  });
+  // Zapisz do historii TYLKO jeśli wystąpił błąd
+  if (error) {
+    await supabase.from("log_links_history").insert({
+      run_id: runId,
+      url: link.url,
+      enemy,
+      error,
+    });
+  }
 
   // Aktualizuj current_links
   await supabase
@@ -580,6 +609,16 @@ process.on("SIGTERM", shutdown);
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  
+  // Inicjalizuj Google Sheets Worker
+  await sheetWorker.initialize();
+  
+  // Uruchom pierwszy sync z Google Sheets (jeśli włączony)
+  if (sheetWorker.enabled) {
+    console.log('📊 Running initial Google Sheets sync...');
+    await sheetWorker.run();
+    lastSheetSync = Date.now();
+  }
   
   // Inicjalizuj pulę przeglądarek
   await initializeBrowserPool();
