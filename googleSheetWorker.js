@@ -315,7 +315,7 @@ class GoogleSheetWorker {
       // Pobierz wszystkie linki z bazy (tylko clicktrans.pl)
       const { data: currentLinks, error: fetchError } = await this.supabase
         .from('log_current_links')
-        .select('id, url, created')
+        .select('url, created')
         .like('url', '%clicktrans.pl%');
 
       if (fetchError) {
@@ -347,13 +347,13 @@ class GoogleSheetWorker {
         return { removed: 0 };
       }
 
-      // Usuń linki
-      const idsToRemove = linksToRemove.map(link => link.id);
+      // Usuń linki (używamy url jako klucza głównego zamiast id)
+      const urlsToRemove = linksToRemove.map(link => link.url);
       
       const { error: deleteError } = await this.supabase
         .from('log_current_links')
         .delete()
-        .in('id', idsToRemove);
+        .in('url', urlsToRemove);
 
       if (deleteError) {
         console.error('❌ Error removing links:', deleteError);
