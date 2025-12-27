@@ -4,18 +4,22 @@ Aplikacja do automatycznego śledzenia aktywności konkurencji na giełdzie popr
 
 ## 📋 Funkcjonalność
 
+- **🔐 Autentykacja użytkowników** - system logowania z Supabase Auth (server-side)
 - **Zarządzanie listą linków** - dodawanie, usuwanie i aktualizacja URL-i do monitorowania
 - **Automatyczne sprawdzanie** - wykorzystanie Puppeteer do pobierania pełnej treści stron (po załadowaniu JavaScript)
 - **Detekcja konkurencji** - wyszukiwanie ID konkurencji w źródle strony
+- **Detekcja zakończonych ofert** - automatyczne oznaczanie ofert z tekstem "Ogłoszenie nieaktualne"
 - **Historia sprawdzeń** - pełna dokumentacja wszystkich runów i ich wyników
 - **Obsługa błędów** - zapisywanie błędów do bazy danych
 - **Interfejs webowy** - prosty frontend do zarządzania i przeglądania wyników
+- **Ochrona danych** - sesje po stronie serwera, klucze API chronione w .env
 
 ## 🏗️ Architektura
 
-- **Backend**: Node.js + Express + Puppeteer
+- **Backend**: Node.js + Express + Puppeteer + express-session
 - **Baza danych**: Supabase (PostgreSQL)
-- **Frontend**: Vanilla JavaScript + HTML/CSS
+- **Frontend**: Vanilla JavaScript + HTML/CSS (bez zewnętrznych bibliotek)
+- **Autentykacja**: Server-side z sesjami HTTP-only cookies
 
 ## 📦 Instalacja
 
@@ -41,13 +45,27 @@ Edytuj plik `.env`:
 ```env
 SUPABASE_URL=https://twoj-projekt.supabase.co
 SUPABASE_ANON_KEY=twoj-klucz-anon
+SESSION_SECRET=wygeneruj-losowy-sekret-min-32-znaki
 ENEMY=12345,67890,11111
 PORT=3000
+```
+
+**💡 Generowanie SESSION_SECRET:**
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
 4. **Utwórz tabele w Supabase**
 
 Uruchom skrypt SQL z pliku `docs/db.sql` w swojej bazie Supabase.
+
+5. **Skonfiguruj autentykację**
+
+Szczegółowe instrukcje konfiguracji autentykacji znajdziesz w `docs/AUTH_SETUP.md`:
+- Utwórz użytkownika w Supabase
+- Zaktualizuj klucze API w `public/index.html`
+
+**⚠️ WAŻNE**: Przed uruchomieniem musisz skonfigurować Supabase Auth!
 
 ## 🚀 Uruchomienie
 
@@ -59,13 +77,19 @@ Aplikacja będzie dostępna pod adresem: `http://localhost:3000`
 
 ## 📚 API Endpoints
 
-### Linki
-- `GET /api/links` - Pobierz wszystkie linki
-- `POST /api/links/update` - Aktualizuj listę linków
-- `PATCH /api/links/:url/check` - Oznacz link jako obsłużony
+### Autentykacja
+- `POST /api/auth/login` - Zaloguj użytkownika (body: `{email, password}`)
+- `POST /api/auth/logout` - Wyloguj użytkownika
+- `GET /api/auth/session` - Sprawdź aktywną sesję
 
-### Runy
-- `POST /api/run` - Uruchom nowy run sprawdzający
+### Linki (wymagają autentykacji)
+- `GET /api/links` - Pobierz wszystkie linki
+- `POST /api/links/update` - Aktualizuj listę linków (body: `{urls: [...]}`)
+- `PATCH /api/links/:url/check` - Oznacz link jako obsłużony (body: `{checked: true/false}`)
+- `PATCH /api/links/:url/comment` - Dodaj/edytuj komentarz (body: `{comment: "..."}`)
+- `DELETE /api/links/:url` - Usuń link
+
+### Runy (wymagają autentykacji)
 - `GET /api/runs` - Pobierz historię runów
 - `GET /api/history` - Pobierz historię sprawdzeń
 
@@ -129,18 +153,34 @@ Aplikacja będzie dostępna pod adresem: `http://localhost:3000`
 ### Zmienne środowiskowe
 - `SUPABASE_URL` - URL projektu Supabase
 - `SUPABASE_ANON_KEY` - Klucz anon z Supabase
+- `SESSION_SECRET` - Klucz szyfrujący sesje (min. 32 znaki)
 - `ENEMY` - Lista ID konkurencji oddzielona przecinkami
 - `PORT` - Port serwera (domyślnie 3000)
 
+## 🔒 Bezpieczeństwo
+
+### Architektura autentykacji (server-side)
+
+- ✅ **Klucze API tylko na serwerze** - żadne klucze Supabase nie trafiają do przeglądarki
+- ✅ **HTTP-only cookies** - sesje chronione przed dostępem JavaScript
+- ✅ **Middleware autentykacji** - wszystkie endpointy API wymagają zalogowania
+- ✅ **Express-session** - profesjonalne zarządzanie sesjami
+- ✅ **Centralizacja** - jedna implementacja auth zamiast duplikacji frontend/backend
+
+### Migracja z client-side auth
+
+Jeśli aktualizujesz z poprzedniej wersji z autentykacją po stronie frontendu, 
+zobacz szczegółową instrukcję migracji: **`docs/MIGRATION_TO_SERVER_AUTH.md`**
+
 ## 📝 TODO / Rozszerzenia
 
-- [ ] Automatyczne cykliczne uruchamianie runów (cron)
+- [x] ~~Autentykacja użytkowników~~ ✅ (server-side sessions)
+- [x] ~~Automatyczne cykliczne uruchamianie runów~~ ✅ (continuous loop)
 - [ ] Powiadomienia email/webhook przy wykryciu konkurencji
 - [ ] Dashboard z wykresami i statystykami
 - [ ] Eksport danych do CSV/Excel
 - [ ] Filtrowanie i wyszukiwanie w historii
 - [ ] Paginacja dla dużych list
-- [ ] Autentykacja użytkowników
 
 ## 📄 Licencja
 

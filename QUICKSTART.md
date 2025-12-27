@@ -5,9 +5,12 @@
 1. Utwórz konto na [Supabase](https://supabase.com)
 2. Stwórz nowy projekt
 3. Przejdź do **SQL Editor** i wykonaj skrypt z pliku `docs/db.sql`
-4. Skopiuj dane dostępowe:
+4. Przejdź do **Authentication** → **Users** → **Add user** i utwórz użytkownika
+5. Skopiuj dane dostępowe:
    - Project URL (Settings → API → Project URL)
    - Anon key (Settings → API → Project API keys → anon public)
+
+**📖 Szczegółowa instrukcja:** `docs/AUTH_SETUP.md`
 
 ## Krok 2: Konfiguracja aplikacji
 
@@ -16,19 +19,26 @@
 cp .env.example .env
 ```
 
-2. Edytuj plik `.env`:
+2. Wygeneruj SESSION_SECRET:
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+3. Edytuj plik `.env`:
 ```env
 SUPABASE_URL=https://twoj-projekt.supabase.co
 SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+SESSION_SECRET=<wygenerowany-klucz>
 ENEMY=12345,67890,11111
 PORT=3000
 ```
 
 **Ważne:** W zmiennej `ENEMY` podaj ID konkurencji oddzielone przecinkami (bez spacji).
 
-## Krok 3: Uruchomienie
+## Krok 3: Instalacja i uruchomienie
 
 ```bash
+npm install
 npm start
 ```
 
@@ -36,18 +46,22 @@ Otwórz przeglądarkę: **http://localhost:3000**
 
 ## Pierwsze użycie
 
-1. **Dodaj linki do monitorowania:**
+1. **Zaloguj się:**
+   - Użyj emaila i hasła utworzonego w Supabase (Krok 1.4)
+
+2. **Dodaj linki do monitorowania:**
    - Kliknij zakładkę "Aktualizacja Listy"
    - Wklej listę URL-i (jeden na linię)
    - Kliknij "AKTUALIZUJ"
 
-2. **Uruchom sprawdzanie:**
-   - Wróć do zakładki "Aktualna Lista"
-   - Kliknij "▶️ Uruchom Sprawdzanie"
-   - Proces działa w tle - odśwież stronę po chwili
+3. **Automatyczne sprawdzanie:**
+   - Serwer automatycznie sprawdza linki w tle
+   - Kliknij "🔄 Odśwież" w zakładce "Aktualna Lista"
+   - Sprawdzanie działa ciągle, nie trzeba nic uruchamiać
 
-3. **Sprawdź wyniki:**
+4. **Sprawdź wyniki:**
    - Status "⚠️ Konkurencja" = znaleziono ID konkurencji
+   - Status "🔚 Zakończone" = oferta nieaktualna
    - Status "✓ OK" = nie znaleziono konkurencji
    - Status "⚠️ Błąd" = wystąpił problem z pobieraniem strony
 

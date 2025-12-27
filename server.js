@@ -4,11 +4,25 @@ import puppeteer from "puppeteer";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import os from "os";
+import session from "express-session";
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
+
+// Session middleware
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-secret-key-change-in-production',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production', // true tylko w HTTPS
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000 // 24 godziny
+  }
+}));
+
 app.use(express.static("public"));
 
 let browserPool = [];
@@ -24,6 +38,67 @@ const supabase = createClient(
 
 // Lista ID konkurencji
 const ENEMY_IDS = process.env.ENEMY ? process.env.ENEMY.split(",") : [];
+
+// ============== AUTH MIDDLEWARE ==============
+function requireAuth(req, res, next) {
+  if (!req.session.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+// ============== AUTH ENDPOINTS ==============
+
+// POST /api/auth/login
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password required' });
+    }
+    
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+    
+    if (error) {
+      console.error('Login error:', error);
+      return res.status(401).json({ error: error.message });
+    }
+    
+    // Zapisz użytkownika w sesji
+    req.session.user = {
+      id: data.user.id,
+      email: data.user.email
+    };
+    
+    res.json({ user: req.session.user });
+  } catch (err) {
+    console.error('Login exception:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/auth/logout
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to logout' });
+    }
+    res.json({ success: true });
+  });
+});
+
+// GET /api/auth/session
+app.get('/api/auth/session', (req, res) => {
+  if (req.session.user) {
+    res.json({ user: req.session.user });
+  } else {
+    res.json({ user: null });
+  }
+});
 
 // helper sleep
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -130,7 +205,7 @@ app.get("/fetch", async (req, res) => {
 // ============== API ENDPOINTS ==============
 
 // GET /api/links - Pobierz wszystkie linki
-app.get("/api/links", async (req, res) => {
+app.get("/api/links", requireAuth, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("log_current_links")
@@ -146,7 +221,7 @@ app.get("/api/links", async (req, res) => {
 });
 
 // POST /api/links/update - Aktualizuj listę linków
-app.post("/api/links/update", async (req, res) => {
+app.post("/api/links/update", requireAuth, async (req, res) => {
   try {
     const { urls } = req.body; // array of URLs
 
@@ -222,7 +297,7 @@ app.post("/api/links/update", async (req, res) => {
 });
 
 // PATCH /api/links/:url/check - Oznacz link jako checked
-app.patch("/api/links/:url/check", async (req, res) => {
+app.patch("/api/links/:url/check", requireAuth, async (req, res) => {
   try {
     const url = decodeURIComponent(req.params.url);
     const { checked } = req.body;
@@ -241,7 +316,7 @@ app.patch("/api/links/:url/check", async (req, res) => {
 });
 
 // PATCH /api/links/:url/comment - Aktualizuj komentarz linka
-app.patch("/api/links/:url/comment", async (req, res) => {
+app.patch("/api/links/:url/comment", requireAuth, async (req, res) => {
   try {
     const url = decodeURIComponent(req.params.url);
     const { comment } = req.body;
@@ -260,7 +335,7 @@ app.patch("/api/links/:url/comment", async (req, res) => {
 });
 
 // DELETE /api/links/:url - Usuń link
-app.delete("/api/links/:url", async (req, res) => {
+app.delete("/api/links/:url", requireAuth, async (req, res) => {
   try {
     const url = decodeURIComponent(req.params.url);
 
@@ -278,12 +353,12 @@ app.delete("/api/links/:url", async (req, res) => {
 });
 
 // POST /api/run - Uruchom nowy run sprawdzający konkurencję (tylko dla zgodnośći API)
-app.post("/api/run", async (req, res) => {
+app.post("/api/run", requireAuth, async (req, res) => {
   res.json({ message: "Automatic runs are enabled. Check is running continuously." });
 });
 
 // GET /api/runs - Pobierz historię runów
-app.get("/api/runs", async (req, res) => {
+app.get("/api/runs", requireAuth, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("log_runs")
@@ -300,7 +375,7 @@ app.get("/api/runs", async (req, res) => {
 });
 
 // GET /api/history - Pobierz historię sprawdzeń
-app.get("/api/history", async (req, res) => {
+app.get("/api/history", requireAuth, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("log_links_history")

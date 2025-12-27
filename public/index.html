@@ -289,10 +289,156 @@
     .btn-delete:active {
       background-color: #f5c6cb;
     }
+    
+    /* Login styles */
+    .login-container {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    
+    .login-box {
+      background: white;
+      padding: 40px;
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      width: 100%;
+      max-width: 400px;
+    }
+    
+    .login-box h2 {
+      margin-bottom: 30px;
+      color: #333;
+      text-align: center;
+    }
+    
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      color: #495057;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    
+    .form-group input {
+      width: 100%;
+      padding: 12px 15px;
+      border: 2px solid #dee2e6;
+      border-radius: 6px;
+      font-size: 14px;
+      transition: border-color 0.3s;
+    }
+    
+    .form-group input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    
+    .btn-login {
+      width: 100%;
+      padding: 12px;
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    
+    .btn-login:hover {
+      background: #5568d3;
+    }
+    
+    .btn-login:disabled {
+      background: #a0aec0;
+      cursor: not-allowed;
+    }
+    
+    .error-message {
+      background: #fee;
+      color: #c33;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      font-size: 14px;
+      text-align: center;
+    }
+    
+    .app-container {
+      display: none;
+    }
+    
+    .logout-btn {
+      padding: 8px 16px;
+      background: #dc3545;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: background 0.3s;
+    }
+    
+    .logout-btn:hover {
+      background: #c82333;
+    }
+    
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      margin-bottom: 20px;
+      padding: 15px;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .user-email {
+      flex: 1;
+      color: #495057;
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
-  <div class="container">
+  <!-- Login Screen -->
+  <div id="login-screen" class="login-container">
+    <div class="login-box">
+      <h2>🔍 Loggy</h2>
+      <div id="login-error"></div>
+      <form id="login-form" onsubmit="handleLogin(event)">
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" required autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label for="password">Hasło</label>
+          <input type="password" id="password" name="password" required autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn-login" id="login-btn">Zaloguj się</button>
+      </form>
+    </div>
+  </div>
+  
+  <!-- Main App -->
+  <div id="app-container" class="app-container container">
+    <div class="user-info">
+      <div class="user-email">
+        <strong>Zalogowany jako:</strong> <span id="user-email"></span>
+      </div>
+      <button class="logout-btn" onclick="handleLogout()">Wyloguj</button>
+    </div>
+    
     <h1>🔍 Loggy - Monitor Konkurencji</h1>
     
     <div class="nav">
@@ -367,9 +513,84 @@
       
       <div id="update-result"></div>
     </div>
-  </div>
+  </div> <!-- End of app-container -->
 
   <script>
+    // ============== AUTH ==============
+    async function checkAuth() {
+      try {
+        const res = await fetch('/api/auth/session');
+        const data = await res.json();
+        
+        if (data.user) {
+          showApp(data.user);
+        } else {
+          showLogin();
+        }
+      } catch (err) {
+        console.error('Auth check error:', err);
+        showLogin();
+      }
+    }
+    
+    function showLogin() {
+      document.getElementById('login-screen').style.display = 'flex';
+      document.getElementById('app-container').style.display = 'none';
+    }
+    
+    function showApp(user) {
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('app-container').style.display = 'block';
+      document.getElementById('user-email').textContent = user.email;
+      loadLinks();
+    }
+    
+    async function handleLogin(event) {
+      event.preventDefault();
+      
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      const loginBtn = document.getElementById('login-btn');
+      const errorDiv = document.getElementById('login-error');
+      
+      loginBtn.disabled = true;
+      loginBtn.textContent = 'Logowanie...';
+      errorDiv.innerHTML = '';
+      
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        
+        const data = await res.json();
+        
+        if (!res.ok) {
+          throw new Error(data.error || 'Login failed');
+        }
+        
+        showApp(data.user);
+      } catch (error) {
+        errorDiv.innerHTML = `<div class="error-message">Błąd logowania: ${error.message}</div>`;
+      } finally {
+        loginBtn.disabled = false;
+        loginBtn.textContent = 'Zaloguj się';
+      }
+    }
+    
+    async function handleLogout() {
+      if (confirm('Czy na pewno chcesz się wylogować?')) {
+        try {
+          await fetch('/api/auth/logout', { method: 'POST' });
+          showLogin();
+        } catch (err) {
+          console.error('Logout error:', err);
+          showLogin(); // Wyloguj lokalnie mimo błędu
+        }
+      }
+    }
+    
     // ============== NAVIGATION ==============
     let refreshInterval = null;
     
@@ -749,7 +970,7 @@
 
     // ============== INIT ==============
     window.addEventListener('DOMContentLoaded', () => {
-      loadLinks();
+      checkAuth();
     });
   </script>
 </body>
