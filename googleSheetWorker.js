@@ -347,17 +347,26 @@ class GoogleSheetWorker {
         return { removed: 0 };
       }
 
-      // Usuń linki (używamy url jako klucza głównego zamiast id)
-      const urlsToRemove = linksToRemove.map(link => link.url);
+      // Usuń linki pojedynczo (url jest kluczem głównym)
+      let removedCount = 0;
+      let failedCount = 0;
       
-      const { error: deleteError } = await this.supabase
-        .from('log_current_links')
-        .delete()
-        .in('url', urlsToRemove);
+      for (const link of linksToRemove) {
+        const { error: deleteError } = await this.supabase
+          .from('log_current_links')
+          .delete()
+          .eq('url', link.url);
 
-      if (deleteError) {
-        console.error('❌ Error removing links:', deleteError);
-        return { removed: 0 };
+        if (deleteError) {
+          console.error('❌ Error removing link:', link.url, deleteError);
+          failedCount++;
+        } else {
+          removedCount++;
+        }
+      }
+
+      if (failedCount > 0) {
+        console.log(`⚠️  Failed to remove ${failedCount} links`);
       }
 
       // Pokaż które linki zostały usunięte i dlaczego
@@ -367,11 +376,11 @@ class GoogleSheetWorker {
         return createdDate < twoDaysAgo;
       });
 
-      console.log(`🗑️  Removed ${linksToRemove.length} links:`);
+      console.log(`🗑️  Removed ${removedCount} links (failed: ${failedCount}):`);
       console.log(`    - Not in sheet: ${notInSheet.length}`);
       console.log(`    - Older than 2 days: ${olderThanTwoDays.length}`);
 
-      return { removed: linksToRemove.length };
+      return { removed: removedCount };
     } catch (error) {
       console.error('❌ Error in removeOldOrMissingLinks:', error.message);
       return { removed: 0 };
